@@ -3,7 +3,7 @@
 
 **AI-Assisted Network Monitoring, Anomaly Detection, and Device Discovery**
 
-SAINTS (Super Advanced Intelligent Network Threat Scanner) is a network security platform designed to help users identify devices, monitor network traffic, establish behavioral baselines, and detect potentially suspicious activity. Designed to operate on dedicated SAINTS hardware, the platform aims to make network security more accessible by translating complex network activity into actionable alerts that both technical and non-technical users can understand.
+SAINTS (Super Advanced Intelligent Network Threat Scanner) is a network security platform designed to help users identify devices, monitor network traffic, establish behavioral baselines, and detect potentially suspicious activity. The platform aims to make network security more accessible by translating complex network activity into actionable alerts that both technical and non-technical users can understand.
 
 By combining network discovery, packet analysis, and AI-assisted behavioral analysis, SAINTS helps users understand what is happening on their networks and identify activity that deviates from expected behavior.
 
