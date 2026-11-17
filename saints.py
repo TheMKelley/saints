@@ -1,19 +1,28 @@
-# Super Advanced Intelligent Network Threat Scanner (SAINTS) Module - John Stotler and Michael Kelley, 2026. All rights reserved.
+# Super Advanced Intelligent Network Threat Scanner (SAINTS) Module. By John Stotler and Michael Kelley, 2026. All rights reserved.
+# Ollama MIT license applies to all use. See Ollama license at https://github.com/ollama/ollama/blob/main/LICENSE.
+
 # HISTORY:
-#   - v0.1 (9/10/2026) - initial tkinter shell
-#   - v0.2 (9/20/2026) - redesigned UI, integrated live ARP scan output into the main window
-#   - v0.3 (10/07/2026) - added multithreaded TCP port scanning for a selected host
+#   - v0.1 (9/10/2026): initial tkinter shell
+#   - v0.2 (9/20/2026): redesigned UI, integrated live ARP scan output into the main window
+#   - v0.3 (10/07/2026): added multithreaded TCP port scanning for a selected host
+#   - v1.0 (10/15/2026): added Ollama AI integration for port analysis and risk assessment. Now has Ollama dependency.
 
 # ---- IMPORTS ---------------------------------------------------------------
+import csv
 import ipaddress
 import socket
 import threading
 import time
 import tkinter as tk
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from tkinter import ttk, messagebox
-
 import scapy.all as scapy
+
+from datetime import datetime
+
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from tkinter import ttk, messagebox, filedialog
+from saintsai import OllamaManager, AIAgent, AIPanel
+
+
 
 # ---- COLORS / THEME --------------------------------------------------------
 BG_DARK = "#0f1117"
@@ -46,11 +55,10 @@ PORT_WORKERS = 200     # concurrent connection attempts
 
 # ---- SCANNER LOGIC (from scanner.py, adapted for GUI callbacks) -----------
 def run_scan(ip_range, on_result, on_status, on_done):
-    """Runs an ARP scan and streams results back to the GUI via callbacks.
-    on_result(ip, mac) is called for each device found.
-    on_status(text) updates the status line.
-    on_done(count) is called when finished (or on error, with count=-1).
-    """
+    #Runs an ARP scan and streams results back to the GUI via callbacks.
+    #on_result(ip, mac) is called for each device found.
+    #on_status(text) updates the status line.
+    #on_done(count) is called when finished (or on error, with count=-1).
     try:
         on_status(f"Scanning {ip_range} ...")
 
@@ -79,10 +87,9 @@ def run_scan(ip_range, on_result, on_status, on_done):
 
 
 def parse_ports(text):
-    """Turns user input into a sorted list of ports.
-    Accepts: 'common', 'all', or comma-separated ports/ranges like '22,80,8000-8100'.
-    Raises ValueError with a readable message on bad input.
-    """
+    #Turns user input into a sorted list of ports.
+    #Accepts: 'common', 'all', or comma-separated ports/ranges like '22,80,8000-8100'.
+    #Raises ValueError with a readable message on bad input.
     text = text.strip().lower()
     if not text or text == "common":
         return sorted(COMMON_PORTS)
@@ -116,7 +123,7 @@ def parse_ports(text):
 
 
 def _check_port(host, port, timeout):
-    """Returns True if a TCP connection to host:port succeeds."""
+    #Returns True if a TCP connection to host:port succeeds.
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(timeout)
@@ -133,11 +140,10 @@ def _service_name(port):
 
 
 def run_port_scan(host, ports, stop_event, on_result, on_progress, on_done):
-    """TCP connect scan of `ports` on `host`, using a thread pool.
-    on_result(port, service) is called for each open port.
-    on_progress(done, total) is called periodically.
-    on_done(open_count, stopped) is called when finished; open_count=-1 on error.
-    """
+    #TCP connect scan of `ports` on `host`, using a thread pool.
+    #on_result(port, service) is called for each open port.
+    #on_progress(done, total) is called periodically.
+    #on_done(open_count, stopped) is called when finished; open_count=-1 on error.
     total = len(ports)
     done = 0
     open_count = 0
@@ -171,10 +177,9 @@ def run_port_scan(host, ports, stop_event, on_result, on_progress, on_done):
 
 
 def get_self_info():
-    """Reads this machine's own network info: hostname, local IP, MAC,
-    active scapy interface, default gateway, and the /24 range that
-    contains the local IP
-    """
+    #Reads this machine's own network info: hostname, local IP, MAC,
+    #active scapy interface, default gateway, and the /24 range that
+    #contains the local IP
     info = {
         "hostname": None,
         "local_ip": None,
@@ -229,9 +234,14 @@ class SaintsApp:
         self.scanning = False
         self.port_scanning = False
         self.port_stop_event = threading.Event()
+        self.port_host = None   # host the port table currently shows
+
+        # AI engine must exist before the UI is built (the AI panel needs the agent)
+        self.ollama = OllamaManager()
+        self.agent = AIAgent(self.ollama)
 
         root.title("SAINTS - Super Advanced Intelligent Threat Scanner")
-        root.geometry("980x780")
+        root.geometry("980x900")
         root.minsize(760, 620)
         root.configure(bg=BG_DARK)
 
@@ -239,7 +249,10 @@ class SaintsApp:
         self._build_header()
         self._build_controls()
         self._build_status_bar()     
-        self._build_results_panel()
+        self._build_results_panel()   # creates self.ai_panel
+
+        self.ai_panel.boot()          # start Ollama in the background
+        root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # -- styling --------------------------------------------------------
     def _build_style(self):
@@ -286,7 +299,7 @@ class SaintsApp:
         ).pack(anchor="w")
         tk.Label(
             title_box,
-            text="Super Advanced Intelligent Threat Scanner",
+            text="Super Advanced Intelligent Network Threat Scanner",
             font=FONT_SUBTITLE,
             bg=BG_DARK,
             fg=TEXT_MUTED,
@@ -443,6 +456,22 @@ class SaintsApp:
         )
         self.port_stop_button.grid(row=3, column=2, padx=(10, 0))
 
+        self.export_button = tk.Button(
+            inner,
+            text="EXPORT CSV",
+            font=FONT_BTN,
+            bg=BG_PANEL_ALT,
+            fg=ACCENT,
+            activebackground=BG_PANEL_ALT,
+            activeforeground=ACCENT,
+            relief="flat",
+            padx=16,
+            pady=10,
+            cursor="hand2",
+            command=self.export_csv,
+        )
+        self.export_button.grid(row=3, column=3, padx=(10, 0))
+
         self.port_count_label = tk.Label(
             inner, text="0 open ports", font=FONT_SUBTITLE, bg=BG_PANEL, fg=TEXT_MUTED
         )
@@ -510,7 +539,7 @@ class SaintsApp:
 
         self.port_header = tk.Label(
             port_panel,
-            text="OPEN PORTS — select a host above (double-click to scan)",
+            text="OPEN PORTS - select a host above (double-click to scan)",
             font=FONT_LABEL,
             bg=BG_DARK,
             fg=TEXT_MUTED,
@@ -539,6 +568,15 @@ class SaintsApp:
         port_scrollbar.pack(side="right", fill="y")
         paned.add(port_panel, minsize=120, stretch="always")
 
+        # -- AI analyst panel --
+        theme = dict(
+            BG_DARK=BG_DARK, BG_PANEL=BG_PANEL, BG_PANEL_ALT=BG_PANEL_ALT, ACCENT=ACCENT,
+            TEXT_MAIN=TEXT_MAIN, TEXT_MUTED=TEXT_MUTED, DANGER=DANGER, BORDER=BORDER,
+            FONT_LABEL=FONT_LABEL, FONT_MONO=FONT_MONO, FONT_BTN=FONT_BTN, FONT_STATUS=FONT_STATUS,
+        )
+        self.ai_panel = AIPanel(paned, self.agent, theme)
+        paned.add(self.ai_panel, minsize=140, stretch="always")
+
     # -- status bar -------------------------------------------------------
     def _build_status_bar(self):
         bar = tk.Frame(self.root, bg=BG_PANEL, height=30)
@@ -546,7 +584,7 @@ class SaintsApp:
 
         self.status_label = tk.Label(
             bar,
-            text="Idle — set a target range and begin scan.",
+            text="Idle - set a target range and begin scan.",
             font=FONT_STATUS,
             bg=BG_PANEL,
             fg=TEXT_MUTED,
@@ -611,7 +649,7 @@ class SaintsApp:
         return None
 
     def _resolve_port_target(self):
-        """Selected host wins; otherwise fall back to a single IP typed in the target box."""
+        #Selected host wins; otherwise fall back to a single IP typed in the target box.
         host = self._selected_host()
         if host:
             return host
@@ -641,6 +679,7 @@ class SaintsApp:
             return
 
         self._clear_ports()
+        self.port_host = host
         self.port_scanning = True
         self.port_stop_event.clear()
         self.port_scan_button.config(state="disabled", text="SCANNING...", bg=TEXT_MUTED)
@@ -689,7 +728,7 @@ class SaintsApp:
         self._clear_ports(reset_label=False)
         for port, state, service in rows:
             self.port_tree.insert("", "end", values=(port, state, service), tags=("open",))
-
+        self.ai_panel.set_context(host, [(r[0], r[2]) for r in rows])
         self._draw_dot(ACCENT)
         verb = "stopped" if stopped else "complete"
         self.set_status(f"Port scan {verb} for {host}. {open_count} open port(s) found.")
@@ -740,7 +779,7 @@ class SaintsApp:
             self.set_status("Self-scan complete. Target range suggested below.")
         else:
             self.set_status(
-                "Self-scan partially failed — try running as Administrator for full results."
+                "Self-scan partially failed. Try running as Administrator."
             )
 
     def _apply_suggested_range(self):
@@ -748,17 +787,65 @@ class SaintsApp:
             self.target_var.set(self._suggested_range)
             self.set_status(f"Target range set to {self._suggested_range}")
 
+    # -- actions: export --------------------------------------------------------
+    def export_csv(self):
+        #Saves the current results to a CSV: one row per open port for the
+        #port-scanned host, and one row per remaining host with blank port columns.
+        hosts = [tuple(str(v) for v in self.tree.item(i)["values"])
+                 for i in self.tree.get_children()]
+        ports = [tuple(str(v) for v in self.port_tree.item(i)["values"])
+                 for i in self.port_tree.get_children()]
+
+        if not hosts and not ports:
+            messagebox.showinfo("SAINTS", "Nothing to export yet. Run a scan first.")
+            return
+
+        path = filedialog.asksaveasfilename(
+            title="Export scan results",
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+            initialfile=f"saints_scan_{datetime.now():%Y%m%d_%H%M%S}.csv",
+        )
+        if not path:
+            return  # user cancelled
+
+        macs = {ip: mac for ip, mac in hosts}
+        rows = []
+        for ip, mac in hosts:
+            if ip == self.port_host and ports:
+                rows.extend([ip, mac, port, state, svc] for port, state, svc in ports)
+            else:
+                rows.append([ip, mac, "", "", ""])
+        if ports and self.port_host and self.port_host not in macs:
+            # port scan of a host that was typed in rather than found by the ARP scan
+            rows.extend([self.port_host, "", port, state, svc] for port, state, svc in ports)
+
+        try:
+            with open(path, "w", newline="", encoding="utf-8-sig") as f:
+                writer = csv.writer(f)
+                writer.writerow(["ip_address", "mac_address", "port", "state", "service"])
+                writer.writerows(rows)
+        except OSError as exc:
+            messagebox.showerror("SAINTS", f"Could not save file:\n{exc}")
+            return
+
+        self.set_status(f"Exported {len(rows)} row(s) to {path}")
+
     def clear_results(self):
         for row in self.tree.get_children():
             self.tree.delete(row)
         self.count_label.config(text="0 devices found")
         self._clear_ports()
         self.port_header.config(
-            text="OPEN PORTS — select a host above (double-click to scan)", fg=TEXT_MUTED
+            text="OPEN PORTS: select a host above (double-click to scan)", fg=TEXT_MUTED
         )
 
     def set_status(self, text):
         self.status_label.config(text=text)
+
+    def _on_close(self):
+        self.ollama.stop()
+        self.root.destroy()
 
 
 # ---- ENTRY POINT ------------------------------------------------------------
